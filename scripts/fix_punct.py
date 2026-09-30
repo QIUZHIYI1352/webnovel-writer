@@ -4,12 +4,14 @@
 背景：用 Write 工具写 .md 正文时，会被宿主做一次归一化：
   - 中文全角逗号 `，` -> 半角 `,`
   - 中文引号 `“”` -> 直角引号 `「」`
+  - 中文引号 `“”` -> 半角 ASCII `"`（部分语境，如 `那个"晦气"远一点`）
   - 中文顿号 `、` 通常保留
 本脚本把这些还原成网文平台要求的全角标点。
 
 规则（只在中文字符语境下替换，避免误伤代码/英文）：
   1. 逗号：半角 `,` 前后只要有一侧是中日韩字符或全角标点，即替换为 `，`
   2. 直角引号 `「` `」` -> `“` `”`（按出现顺序交替配对）
+  2b. ASCII 双引号 `"` 在中文语境下 -> `“` `”`（跟随全篇引号开合状态）
   3. 半角句号 `.` 夹在中文之间 -> `。`（保守：前后都是中文字符才替换）
 
 用法：
@@ -53,10 +55,15 @@ def fix(text):
             text,
         )
 
-    # 2. 直角引号 -> 中文引号，交替配对
+    # 2. 直角引号 + ASCII 双引号 -> 中文引号，跟随全篇开合状态
+    #    同时跟踪已有的 “ ”，保证 ASCII 引号接在正确的一侧
+    def in_cjk(s, i, span=3):
+        lo, hi = max(0, i - span), min(len(s), i + span + 1)
+        return re.search(r"[%s]" % CJK, s[lo:hi]) is not None
+
     out = []
     opening = True
-    for ch in text:
+    for i, ch in enumerate(text):
         if ch == "\u300c":            # 「
             out.append(LQ if opening else RQ)
             opening = not opening
@@ -65,10 +72,18 @@ def fix(text):
             out.append(RQ if not opening else LQ)
             if opening:
                 out.append(RQ)
-            else:
-                pass
             opening = True
             n_quote += 1
+        elif ch == '"' and in_cjk(text, i):
+            out.append(LQ if opening else RQ)
+            opening = not opening
+            n_quote += 1
+        elif ch == LQ:
+            out.append(ch)
+            opening = False
+        elif ch == RQ:
+            out.append(ch)
+            opening = True
         else:
             out.append(ch)
     text = "".join(out)
@@ -98,8 +113,9 @@ def main():
         fixed, nc, nq, nd = fix(t)
         half = t.count(",")
         if check_only:
-            print("%s: halfwidth_comma=%d right_angle_quote=%d"
-                  % (p, half, t.count("\u300c") + t.count("\u300d")))
+            print("%s: halfwidth_comma=%d right_angle_quote=%d ascii_dquote=%d"
+                  % (p, half, t.count("\u300c") + t.count("\u300d"),
+                     t.count('"')))
             continue
         if fixed != t:
             if not t.endswith("\n"):

@@ -103,6 +103,17 @@ AI 腔密度、设定越界、伏笔声明执行率。
 Write 章节 → fix_punct.py（标点归一化）→ check_wordcount.py（字数）→ quality_check.py（质量门禁）
 ```
 ⚠️ **标点必须先清**：半角问号会污染质量门禁的设定越界检查，产出假 P2；直角引号则是发布硬伤。
+⚠️ **清完标点必须重跑质量门禁**：归一化会把原本是 ASCII 直引号的术语变成全角引号，
+从而**让之前被掩盖的设定越界告警浮现出来**（实测新增 4 个 P2）。这不是新问题，是旧问题露头。
+
+**交付/投稿收尾（完本时走一遍）**：
+```
+quality_check.py 全量 → split_chapters.py（分章纯文本）→ make_cover.py（封面）→ 终检脚本
+```
+- `split_chapters.py`：逐章 md → 可直接粘贴的纯文本分章文件（章节名一行 + 正文），
+  剥离 Markdown 标记、UTF-8 BOM 编码
+- `make_cover.py`：AI 底图 + 矢量文字合成 600×800 投稿封面
+- 完整投稿清单见 [short-story.md](references/guides/short-story.md) 第五、六节
 
 → 详见 [shared-infrastructure.md](references/flows/shared-infrastructure.md)
 
