@@ -7,7 +7,7 @@
 产出（每个章节一个 txt）：
     <out>/第NN章-<标题>.txt
       └ 第 1 行   = 章节名（粘到平台「章节名」输入框）
-        空行以后 = 正文（已剥离 Markdown 标记）
+        空行以后 = 正文（已剥离 Markdown 标记与元信息块）
 
 用法：
     python split_chapters.py --src 04-正文 --out 09-分章上架
@@ -19,61 +19,49 @@
     --out   输出目录
     --keep-md  保留 Markdown 加粗标记（默认剥离）
     --bom  以 UTF-8 BOM 写文件（Windows 记事本友好，默认开启）
+
+⚠️ 章节文件若以 `<!-- 元信息块 -->` 开头（`chapter-template.md` 规定的形态），
+   该块**必须整块剥掉、不能进成品**。早期版本用 `re.match(r"^#...")` 抓标题，
+   而 `re.match` 只从文件最开头匹配 —— 于是永远匹配不上，整块注释被当成正文
+   写进成品、`# 第N章 标题` 也一起漏出去、章节名只剩「第一章」。
+   现在统一走 `chapter_io.parse()`，头部识别只有一个实现。
 """
 import argparse
 import os
 import re
 import sys
 
-CN = "零一二三四五六七八九十"
-
-
-def cn_num(n):
-    """1 -> 一, 10 -> 十, 11 -> 十一, 21 -> 二十一"""
-    if n <= 10:
-        return "十" if n == 10 else CN[n]
-    if n < 20:
-        return "十" + CN[n - 10]
-    if n < 100:
-        return CN[n // 10] + "十" + (CN[n % 10] if n % 10 else "")
-    return str(n)
-
-
-def clean_body(body, keep_md=False):
-    if not keep_md:
-        # 星号要**一次清干净**：`**加粗**` 和 `*斜体*` 都会在平台编辑器里
-        # 显示成字面星号。实测漏掉单星号斜体（第 7 章 `*犯者三，当归一。*`）
-        # 会在正文里留下 2 个孤立的 `*`。
-        body = re.sub(r"\*+", "", body)
-        body = body.replace("__", "")
-    lines = [ln.rstrip() for ln in body.split("\n")]
-    out = []
-    for ln in lines:
-        if ln == "" and out and out[-1] == "":
-            continue
-        out.append(ln)
-    return "\n".join(out).strip("\n")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from chapter_io import clean_body, cn_num, count_chars, count_cjk, parse  # noqa: E402  (同目录模块)
 
 
 def parse_chapter(path):
-    """从 md 文件取出 (章号, 章名标题, 正文)"""
-    t = open(path, encoding="utf-8").read().strip("\n")
-    n = int(re.search(r"\d+", os.path.basename(path)).group())
-    m = re.match(r"^#\s*(.+?)\s*\n(.*)$", t, re.S)
-    if m:
-        head, body = m.group(1), m.group(2)
-    else:                      # 没有 # 标题，整篇当正文
-        head, body = "", t
-    part = re.split(r"[\u3000\s]+", head, maxsplit=1)
-    title = part[1] if len(part) > 1 else ""
-    return n, title, body
+    """从 md 文件取出 (章号, 章名标题, 正文, 全文)。
+
+    章号优先取 H1 / 文件名里的数字；标题优先取元信息块的 `标题`，其次取 H1。
+    """
+    with open(path, encoding="utf-8-sig") as fp:
+        raw = fp.read()
+    p = parse(raw)
+    n = p["no"]
+    if n is None:
+        m = re.search(r"\d+", os.path.basename(path))
+        n = int(m.group()) if m else 0
+    title = p["title"] or p["meta"].get("标题", "")
+    return n, title, p["body"], raw
 
 
 def counts(text):
-    """返回 (汉字数, 含标点字符数) —— 唯一口径：去空白"""
-    cjk = len(re.findall(r"[\u4e00-\u9fff]", text))
-    allc = len(re.sub(r"\s", "", text))
-    return cjk, allc
+    """返回 (汉字数, 含标点字符数)。
+
+    ⚠️ **口径来自 `chapter_io`，不要在本文件里另算一套。**
+    旧实现是 `len(re.sub(r"\\s", "", text))`（全文所有非空白字符），
+    与 `check_wordcount.py` 的 CJK+中文标点口径差 115 字/12 章（22449 vs 22334），
+    导致"同一本书三个总字数在各处打架"。现在两边调同一个函数，**永远相等**。
+
+    传参是**章节文件全文**（含 `# 第N章 标题` 行）——与 `check_wordcount.py` 一致。
+    """
+    return count_cjk(text), count_chars(text)
 
 
 def main():
@@ -99,10 +87,10 @@ def main():
 
     rows = []
     for f in files:
-        n, title, body = parse_chapter(os.path.join(a.src, f))
-        body = clean_body(body, a.keep_md)
+        n, title, body, raw = parse_chapter(os.path.join(a.src, f))
         chap_name = f"第{cn_num(n)}章" + (f"\u3000{title}" if title else "")
-        cjk, allc = counts(body)
+        cjk, allc = counts(raw)          # 口径与 check_wordcount.py 一致（全文）
+        body = clean_body(body, a.keep_md)
         rows.append((n, title, chap_name, cjk, allc))
 
         if a.out and not a.list:
@@ -120,6 +108,8 @@ def main():
           f"{sum(r[4] for r in rows):>9}")
     if a.out and not a.list:
         print(f"\n输出目录：{a.out}  共 {len(rows)} 章")
+    print("口径：CJK 汉字 + 中文标点（含 `# 第N章 标题` 行，元信息块不计）"
+          " —— 与 check_wordcount.py 相同")
     return 0
 
 

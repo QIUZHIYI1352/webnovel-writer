@@ -5,7 +5,9 @@
 
 用法:
     python check_wordcount.py <章节文件.md>                  # 单章，默认达标区间 1700-2400
+    python check_wordcount.py <文件1> <文件2> [...]           # 多章（多传的文件不再被忽略）
     python check_wordcount.py --all <目录>/                  # 递归检查目录下全部章节
+    python check_wordcount.py <目录>/                         # 直接传目录亦可
     python check_wordcount.py <文件> 1600 2600               # 自定义达标区间
     python check_wordcount.py --all <目录>/ --min 1700 --max 2400
     python check_wordcount.py --all <目录>/ --json           # 机器可读输出
@@ -19,10 +21,14 @@ import re
 import sys
 from pathlib import Path
 
-CJK = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]")
-CN_PUNCT = re.compile(r"[\u3000-\u303f\uff00-\uffef\u2018\u2019\u201c\u201d\u2026\u2014\u00b7]")
-COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
-CHAPTER_RE = re.compile(r"^第\d+章.*\.md$")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+#: 字数口径的**唯一实现**在 chapter_io —— 不要在本文件里再写一份 CJK / CN_PUNCT 正则。
+#: 实测教训：split_chapters 曾用"全文所有非空白字符"另算一套，同一批 12 章
+#: 与本脚本差 115 字（22449 vs 22334），全项目到处对不上账。
+from chapter_io import count_chars  # noqa: E402
+
+CHAPTER_RE = re.compile(r"^第(\d+)章.*\.md$")
 META_WORDCOUNT = re.compile(r"字数[:：]\s*(\d+)")
 
 DEFAULT_MIN = 1700
@@ -31,11 +37,6 @@ DEFAULT_MAX = 2400
 # Windows 控制台默认 GBK，输出中文前统一 stdout 编码，避免中文路径/提示乱码
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
-
-def count_chars(text: str) -> int:
-    body = COMMENT.sub("", text)
-    return len(CJK.findall(body)) + len(CN_PUNCT.findall(body))
 
 
 def check_file(path: Path, lo: int, hi: int) -> dict:
@@ -68,11 +69,19 @@ def collect_files(target: Path) -> list[Path]:
     return []
 
 
-def parse_args(argv: list[str]) -> tuple[Path, int, int, bool, bool] | None:
+def parse_args(argv: list[str]) -> tuple[list[Path], int, int, bool, bool] | None | str:
+    """返回 (待检查路径列表, 下限, 上限, all_mode, json_mode)。
+
+    特殊返回：``"help"`` = 用户要帮助（调用方应 exit 0）；``None`` = 参数错误（exit 2）。
+
+    ⚠️ 早期版本只取 `positional[0]`，**多传的文件会被静默忽略**——
+    `check_wordcount.py a.md b.md` 只报 a.md，看起来"全部通过"，实际 b.md 根本没查。
+    那是个会骗人的坑，现已在下面显式分流：非纯数字的额外参数一律当成待检查路径。
+    """
     args = list(argv)
     if any(a in ("-h", "--help") for a in args):
         print(__doc__)
-        return None
+        return "help"
 
     all_mode = "--all" in args
     json_mode = "--json" in args
@@ -96,29 +105,48 @@ def parse_args(argv: list[str]) -> tuple[Path, int, int, bool, bool] | None:
         print(__doc__)
         return None
 
-    nums = positional[1:]
+    rest = positional[1:]
+    nums = [a for a in rest if re.fullmatch(r"\d+", a)]
+    extra = [a for a in rest if not re.fullmatch(r"\d+", a)]
+
     if len(nums) >= 2:
+        # 兼容旧写法：check_wordcount.py <文件> 1600 2600
         lo, hi = int(nums[0]), int(nums[1])
 
-    return Path(positional[0]), lo, hi, all_mode, json_mode
+    targets = [Path(positional[0])] + [Path(a) for a in extra]
+    return targets, lo, hi, all_mode, json_mode
 
 
 def main() -> int:
     parsed = parse_args(sys.argv[1:])
+    if parsed == "help":
+        return 0
     if parsed is None:
         return 2
-    target, lo, hi, all_mode, json_mode = parsed
+    targets, lo, hi, all_mode, json_mode = parsed
 
-    if all_mode:
-        files = collect_files(target)
-        if not files:
-            print(f"错误：{target} 下未找到章节文件（第\\d+章-*.md）")
+    files: list[Path] = []
+    for target in targets:
+        if target.is_dir():
+            found = collect_files(target)
+            if not found:
+                print(f"错误：{target} 下未找到章节文件（第\\d+章-*.md）")
+                return 2
+            files.extend(found)
+        elif target.is_file():
+            files.append(target)
+        else:
+            print(f"错误：{target} 不存在（批量检查目录请直接传目录，或用 --all）")
             return 2
-    else:
-        if not target.is_file():
-            print(f"错误：{target} 不是文件（如需批量检查请加 --all）")
-            return 2
-        files = [target]
+
+    # 目录批量扫描时按章号排序；显式传入的文件保持传入顺序
+    if all_mode or any(t.is_dir() for t in targets):
+        seen: dict[int, Path] = {}
+        for p in files:
+            m = CHAPTER_RE.match(p.name)
+            n = int(m.group(1)) if m else 0
+            seen.setdefault(n, p)
+        files = [seen[k] for k in sorted(seen)]
 
     results = [check_file(p, lo, hi) for p in files]
     passed = sum(1 for r in results if r["pass"])

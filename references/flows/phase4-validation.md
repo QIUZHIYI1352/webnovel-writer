@@ -7,15 +7,21 @@
 > 能算出来的，一律以脚本输出为准；模型只负责按脚本给的问题清单和证据去改。
 > 原因见文末「为什么校验必须外移」。
 
-## 0. 一次性跑完两个脚本（先拿数据）
+## 0. 一次性跑完三个脚本（先拿数据）
 
 ```bash
-python "<SKILL_DIR>/scripts/check_wordcount.py" --all "<项目>/vol-XX/" --json
-python "<SKILL_DIR>/scripts/quality_check.py" "<项目>" --json --chapters <批起>-<批止>
+python "<SKILL_DIR>/scripts/manuscript_check.py" "<项目>/" --json              # 文件完整性
+python "<SKILL_DIR>/scripts/check_wordcount.py" --all "<项目>/vol-XX/" --json  # 字数
+python "<SKILL_DIR>/scripts/quality_check.py" "<项目>" --json --chapters <批起>-<批止>  # 质量纪律
 ```
 
-把两份 JSON 合并成问题清单，按 P0 → P1 → P2 排序，然后逐项修复。
+把三份 JSON 合并成问题清单，按 ERROR/P0 → P1 → P2 排序，然后逐项修复。
 **不要在跑脚本前先写自己的判断**——先入为主会让模型倾向于证明自己写得好。
+
+> `manuscript_check.py` 查的是**文件本身有没有被写坏**：首行是不是 `<!--`、六个元信息键齐不齐、
+> 文件名/头部/H1 三处章号一不一致、字数是否漂移、引号配不配平、有没有 BOM/CRLF、
+> 正文有没有整篇重复、章号有没有缺号。
+> **它以前不存在**，所以"头部被整块吞掉"这类硬伤只能靠人肉，实测让第 7 章的头部丢失活到了交付。
 
 ## 1. 字数校验（客观）
 

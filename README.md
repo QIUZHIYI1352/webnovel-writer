@@ -85,20 +85,35 @@
 单文件在千章规模下会膨胀到 200KB+，而每章都要读它——所以必须分层。
 `nextAction` 让"继续更新"能自动判断：该写下一章 / 该补细纲 / 该卷归档 / 已完结。
 
-### 4. 客观校验外移（两条防线）
+### 4. 客观校验外移（三道防线）
+
+**文件完整性**先兜底——头部丢了、正文整篇重复、混进 BOM/CRLF、章号缺号，这类问题
+字数脚本和质量门禁都看不见，肉眼更难：
+
+```bash
+python "<SKILL_DIR>/scripts/manuscript_check.py" "<项目>/"              # 全书体检
+python "<SKILL_DIR>/scripts/manuscript_check.py" "<项目>/" --json       # 有 ERROR 即非零退出
+```
+
+查七项：`head`（首行 `<!--` / 六个元信息键齐 / `# 第NNNN章 标题` 成形）、
+`consistency`（文件名·头部·H1 三处章号一致）、`title`、`wordcount`、
+`quotes`（配平 / ASCII 直引号 / 直角引号残留）、`encoding`（BOM / CRLF）、
+`dup`（整篇重复）、`sequence`（缺号重号）。
+**结构性损坏判 ERROR，字数不在区间只判 WARN**（老项目可能有"不达标但不修改"的约定）。
 
 **字数**不靠模型自评，用脚本实测：
 
 ```bash
 python "<SKILL_DIR>/scripts/check_wordcount.py" "<项目>/vol-01/第0001章-标题.md"
-python "<SKILL_DIR>/scripts/check_wordcount.py" --all "<项目>/vol-01/"        # 整卷
+python "<SKILL_DIR>/scripts/check_wordcount.py" "<项目>/vol-01/"               # 整卷（直接传目录）
 python "<SKILL_DIR>/scripts/check_wordcount.py" --all "<项目>/" --json         # 整本书 + 机器可读
 ```
 
 计字口径 = CJK 汉字 + 中文标点（对齐主流网文平台）。默认达标区间 1700-2400，写作目标 2000。
 HTML 注释中的章节元信息头不计入，且元信息自报字数与实测偏差超 50 字会告警。
+支持一次传多个文件（旧版只认第一个、其余静默忽略）。
 
-**质量纪律**同样外移——这是第二道防线，也是本 skill 区别于其他写作工具的地方：
+**质量纪律**同样外移——这是第三道防线，也是本 skill 区别于其他写作工具的地方：
 
 ```bash
 python "<SKILL_DIR>/scripts/quality_check.py" "<项目>"                    # 全量体检查五项
@@ -152,9 +167,21 @@ webnovel-writer/
 │   └── templates/
 │       └── chapter-template.md       # 章节文件模板（元信息头 + 写作纪律 + AI 腔清单）
 └── scripts/
-    ├── check_wordcount.py            # 字数检查（单章 / 整卷 / 整本书 / JSON 输出）
-    └── quality_check.py              # 质量体检（情绪/钩子/AI腔/设定/伏笔声明执行率）
+    ├── chapter_io.py                   # 章节文件解析/清洗的**唯一实现**（头部识别 + 正文清洗）
+    ├── fix_punct.py                    # 标点归一化（半角→全角 / 直角引号 / ASCII 直引号）
+    ├── fix_quotes.py                   # 中文引号按行配对修复
+    ├── check_wordcount.py              # 字数检查（单章 / 多章 / 整卷 / 整本书 / JSON）
+    ├── quality_check.py                # 质量门禁（情绪/钩子/AI腔/设定/伏笔声明执行率）
+    ├── manuscript_check.py             # 全书体检（头部/编码/重复/配平/章号连续性）
+    ├── split_chapters.py               # 逐章 md → 可直接粘贴的纯文本分章 + 分卷合并稿
+    ├── delivery_check.py               # 交付终检（成品 vs 源文件逐字比对 + 上架门槛）
+    └── make_cover.py                   # AI 底图 + 矢量文字合成 600×800 投稿封面
 ```
+
+> **为什么有 `chapter_io.py`**：章节文件以 `<!-- 元信息块 -->` 开头，而多个脚本曾各自用
+> `re.match(r"^#...")` 抓标题——`re.match` 只锚定字符串开头，对这类文件**永远匹配不上**，
+> 导致元信息块泄进成品、标题塌成「第一章」，而终检因为两端用的是同一套坏逻辑反而报「一致 ✅」。
+> 现在解析与清洗**只有一个实现**，所有脚本 import 它。
 
 **渐进式加载**：SKILL.md 是索引，详细指令全在 references 下按需读取——既不爆上下文，又保证执行时指令的细粒度。
 

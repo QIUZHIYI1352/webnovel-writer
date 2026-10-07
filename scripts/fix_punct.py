@@ -101,28 +101,36 @@ def fix(text):
 
 def main():
     args = sys.argv[1:]
-    if not args:
-        raise SystemExit("usage: python fix_punct.py [--check] <file> [file ...]")
+    if not args or args[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0 if args else 2
     check_only = False
     if args[0] == "--check":
         check_only = True
         args = args[1:]
+    if not args:
+        print(__doc__)
+        return 2
 
     for p in args:
         t = io.open(p, encoding="utf-8").read()
         fixed, nc, nq, nd = fix(t)
-        half = t.count(",")
         if check_only:
-            print("%s: halfwidth_comma=%d right_angle_quote=%d ascii_dquote=%d"
-                  % (p, half, t.count("\u300c") + t.count("\u300d"),
-                     t.count('"')))
+            # ⚠️ 这里必须报**实际会被替换**的数量（fix 的返回值），
+            # 不要报 `t.count(",")` 那种原始计数——两套口径会让人以为"check 说 5 处、
+            # fix 只改了 2 处，是不是漏了"，实际是上下文规则本来就只改 2 处。
+            print("%s: would_fix comma=%d quote=%d dot=%d"
+                  " | raw halfwidth_comma=%d angle_quote=%d ascii_dquote=%d"
+                  % (p, nc, nq, nd, t.count(","),
+                     t.count("\u300c") + t.count("\u300d"), t.count('"')))
             continue
         if fixed != t:
             if not t.endswith("\n"):
                 fixed += "\n"
             io.open(p, "w", encoding="utf-8", newline="\n").write(fixed)
         print("fixed %s (comma=%d quote=%d dot=%d)" % (p, nc, nq, nd))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

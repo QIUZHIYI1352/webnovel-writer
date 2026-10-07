@@ -74,19 +74,27 @@ checks = {'F01 关键短语': '原文里的特征词', ...}
   → 单批次细纲（含 BATCH-DECLARATION）
   → 逐章写：Write → fix_punct.py → check_wordcount.py → quality_check.py
   → 每章 P0 当场修掉
-  → 全篇跑 quality_check + 完整性检查（dup/head）
+  → 全篇走完整交付链（见第六节）
   → 伏笔回收自检
   → 投稿材料打包
 ```
 
 ### 完整性检查（必跑，长篇同款）
-```python
-# 检查整篇重复、标题吞并首句
-for each chapter:
-    head = 首个非空行          # 必须是 `# 第N章　标题`
-    body.count(首句) > 1      # 整篇重复
-    len(head) > 25            # 标题吞并首句
+
+**不要再手写伪代码**——这一项已固化成 `scripts/manuscript_check.py`：
+
+```bash
+python "<SKILL_DIR>/scripts/manuscript_check.py" "."          # 全篇体检
+python "<SKILL_DIR>/scripts/manuscript_check.py" "." --json   # 有 ERROR 即非零退出
 ```
+
+覆盖：`head`（首行 `<!--`、元信息六键齐、`# 第N章 标题` 成形、标题未被首句吞并）、
+`consistency`（文件名/头部/H1 三处章号一致）、`title`、`wordcount`（区间 + `字数:` 漂移）、
+`quotes`（配平 / ASCII 直引号 / 直角引号残留）、`encoding`（BOM / CRLF）、
+`dup`（整篇重复）、`sequence`（缺号重号）。
+
+> 短故事形态的章节文件**同样带元信息头**，所以老办法 `head = 首个非空行` 本身就会踩坑——
+> 首个非空行是 `<!--`，不是 `# 第N章 标题`。解析一律走 `scripts/chapter_io.py`。
 
 ### 合并稿标点终检（收尾必跑）
 
@@ -107,8 +115,10 @@ for pat in [',', r'\?', '!', ':', ';', '"', '\u300c', '\u300d']:
 
 **验收口径**（以本形态实测为准）：
 - 逐章：`check_wordcount.py --all 04-正文` → 10/10 PASS
+- 完整性：`manuscript_check.py .` → `ERROR 0`（头部/编码/重复/配平全绿）
 - 全篇：`quality_check.py .` → `P0 0 / P1 0 / P2 0`
 - 合并稿正文：半角标点全为 0、直角引号 `「」` 为 0、弯引号 `“”` 左右配对等数
+- 成品终检：`delivery_check.py --src 04-正文 --out 09-分章上架` → 逐字一致 ✅（见下节）
 
 ## 五、投稿材料清单
 
@@ -138,9 +148,12 @@ python scripts/split_chapters.py --src 04-正文 --out 09-分章上架
 
 1. **星号要一次清干净**。用 `re.sub(r"\*+", "", t)`，**不要 `replace("**","")`** ——
    实测漏掉单星号斜体（`*犯者三，当归一。*`），成品里留下孤立 `*`。
-2. **字数要有唯一口径**。本 skill 统一为：**正文含标点、去空白、不含章节名**
-   （与平台后台计数一致）。源文件、合并稿、分章文件、投稿材料必须用同一个数字——
-   实测口径不统一导致 19,635 / 19,631 / 19,629 三个数在各处打架。
+2. **字数要有唯一口径**。本 skill 的唯一实现是 `chapter_io.count_chars`
+   （CJK 汉字 + 中文标点、去空白、注释不计、`# 第N章 标题` 行计入）；
+   源文件、合并稿、分章文件、投稿材料必须用同一个数字——
+   实测口径不统一导致 19,635 / 19,631 / 19,629 三个数在各处打架，
+   另一次是 `split_chapters.py` 自算一套、与 `check_wordcount.py` 差 115 字（22449 vs 22334）。
+   **不要再手写计数**，import 那一个函数。
 3. **终检脚本的归一化必须与生成脚本一致**，否则会把**正确的成品判成 ❌ 不一致**，
    然后你去改本来没问题的地方。清洗逻辑只保留一个实现。
 

@@ -113,16 +113,20 @@ webnovel/
 # 单章（默认达标区间 1700-2400）
 python "<SKILL_DIR>/scripts/check_wordcount.py" "<项目>/vol-01/第0001章-标题.md"
 
-# 整卷（递归扫描该卷下所有章节文件）
-python "<SKILL_DIR>/scripts/check_wordcount.py" --all "<项目>/vol-01/"
+# 多章一起传（⚠️ 旧版只认第一个参数，其余被静默忽略，看起来很"全通过"）
+python "<SKILL_DIR>/scripts/check_wordcount.py" "vol-01/第0003章-*.md" "vol-01/第0004章-*.md"
 
-# 整本书（递归扫描项目下所有卷）
+# 整卷 / 整本书（传目录即可，也兼容 --all）
+python "<SKILL_DIR>/scripts/check_wordcount.py" "<项目>/vol-01/"
 python "<SKILL_DIR>/scripts/check_wordcount.py" --all "<项目>/"
 
 # 自定义区间 / 机器可读输出
 python "<SKILL_DIR>/scripts/check_wordcount.py" <文件> 1600 2600
 python "<SKILL_DIR>/scripts/check_wordcount.py" --all "<项目>/" --json
 ```
+
+**传目录时输出按章号排序、重号去重**（取先出现的那个），汇总行给总字数。
+`--json` 里 `chapters` 是数组，每项键名 `file` / `wordCount` / `pass` / `reason`。
 
 Windows 下 `python` 不可用时用托管解释器：`C:/Users/<user>/.workbuddy/binaries/python/versions/3.13.12/python.exe`。
 口径：CJK 汉字 + 中文标点（网文平台计字），HTML 注释（章节元信息头）不计入。
@@ -169,6 +173,45 @@ python "<SKILL_DIR>/scripts/quality_check.py" "<项目>" --json --strict
 > ⚠️ **不得用模型自评替代本脚本。** 实测一部实战验证作品第 1-39 章：模型自评称「节奏紧凑、钩子到位」，
 > 而脚本查出 6 项 P0，包括「第 1-6 章连续 6 章无兑现」「钩子同形状连用 5 章」
 > 「细纲声明执行率 50%」。**凡脚本能算的，一律以脚本为准。**
+
+## 全书体检脚本（manuscript_check.py）
+
+`check_wordcount.py` 只管字数，`quality_check.py` 只管可计算的写作纪律。
+**文件本身的完整性**由本脚本兜底——这类问题脚本不查就只能靠肉眼，而肉眼恰恰看不出来。
+
+```bash
+# 全书体检（每批次收尾必跑）
+python "<SKILL_DIR>/scripts/manuscript_check.py" "<项目>/"
+
+# 单卷 / 指定几章
+python "<SKILL_DIR>/scripts/manuscript_check.py" "<项目>/vol-01/"
+python "<SKILL_DIR>/scripts/manuscript_check.py" "vol-01/第0007章-*.md" "vol-01/第0008章-*.md"
+
+# 机器可读 + 有 ERROR 即非零退出（供 CI / 自动化门禁）
+python "<SKILL_DIR>/scripts/manuscript_check.py" "<项目>/" --json
+```
+
+| 项 | 级别 | 判据 |
+| --- | --- | --- |
+| `head` | ERROR | 首行必须是 `<!--`；六个元信息键齐；`# 第NNNN章 标题` 成形；正文非空 |
+| `consistency` | ERROR | 文件名章号 / 头部 `章号` / H1 章号三者一致 |
+| `title` | WARN | 头部 `标题` 与 H1 标题不一致 |
+| `wordcount` | WARN | 字数不在区间；头部 `字数:` 与实测差超 50 |
+| `quotes` | ERROR / WARN | `LQ != RQ` 为 ERROR；ASCII 直引号、直角引号残留为 WARN |
+| `encoding` | ERROR / WARN | UTF-8 BOM 为 ERROR；CRLF 为 WARN |
+| `dup` | ERROR | 首句出现 ≥2 次且后半字数约为前半的 1 倍（0.8~1.25） |
+| `sequence` | WARN | 目录内章号缺号 / 重号 |
+
+退出码：`0` = 无 ERROR；`1` = 存在 ERROR；`2` = 参数错误。
+字数口径与 `check_wordcount.py` 完全一致，解析与清洗一律走 `chapter_io`。
+
+> ⚠️ **字数不在区间只是 WARN，不判 ERROR。** 某些老项目（如 `刻名`）有"第 1-8 章字数不达标
+> 但不修改"的硬约定，若把字数判成 ERROR，`--strict` 门禁会永远报红、失去意义。
+> **结构性损坏（头部/编码/重复/配平）才拦交付。**
+
+> ⚠️ **写新校验脚本时先做反向验证**：故意塞一个坏文件（BOM + 缺键 + ASCII 直引号 + 整篇重复），
+> 确认它真会报 `FAIL`。只跑正向、看到绿灯就收工，是造出"永远 PASS 的体检脚本"的固定姿势——
+> 而那种脚本比没有更糟。
 
 ## 结构化批次声明块（BATCH-DECLARATION）
 
@@ -282,37 +325,90 @@ emotion_curve: 45燃,46压,47秘辛,48压,49泪,50秘辛,51压,52燃,53压,54燃
 这种"假失败"比漏检更费时间，因为你会去改本来没问题的东西。
 
 **规则**：
-1. 文本清洗只留**一个实现**（本 skill 里是 `split_chapters.clean_body` / 其 `strip_md` 等价物），
+1. 文本清洗只留**一个实现**（本 skill 里是 `scripts/chapter_io.py` 的
+   `clean_body` / `norm_for_compare`，`split_chapters` 与 `delivery_check` 都 import 它），
    其他脚本一律复用，不要各写一份 `replace("**","")`。
 2. 清理 Markdown 标记要用 `re.sub(r"\*+", "", t)`，**不要用 `replace("**","")`** —— 后者漏单星号。
 3. **字数必须有唯一口径**，并在所有交付物里用同一个数字。
-   本 skill 采用：**正文含标点、去空白、不含章节名**（与平台后台计数方式一致）。
+   本 skill 的唯一实现是 **`chapter_io.count_chars`**（= CJK 汉字 + 中文标点、去空白、
+   **HTML 注释不计**、**`# 第N章 标题` 行计入**）。`check_wordcount.py` /
+   `manuscript_check.py` / `split_chapters.py` 全部调它，**三处总数必须永远相等**。
    一旦发现两个文件里的总字数不一样，先怀疑口径，别急着改字数。
 
+   > 实测教训：`split_chapters.py` 曾自己写了一套"全文所有非空白字符"的计数，
+   > 同一批 12 章比 `check_wordcount.py` 多 115 字（**22449 vs 22334**）——
+   > 正文里的 ASCII 数字/字母/半角符号被它数了、平台不数。
+   > 同一本书三个总字数在各处打架，正是"口径必须唯一"这条规矩的由来。
+   >
+   > 口径里的"H1 标题行计入"是**有意**的：平台后台其实不计章节名，但
+   > ① 历史记录（`计划.json` / `写作计划.json` 的 `wordCount`）都是这个数，改了要全项目重算；
+   > ② 头部一旦被吞（第 7 章那次），字数会立刻偏小，反而成了损伤信号。
+   > **差额 = 标题字数（约 5-7 字/章），不要为此去改已记录的数字。**
 
-## 正文被写坏（整篇重复 / 标题粘连）
 
-**两次实测**（第 32 章、第 37 章）：正文文件会变成「**内容整篇重复一遍、标题被吞并与首句粘连**」。
+## 正文被写坏（整篇重复 / 标题粘连 / 头部被吞）
 
-**症状（体检脚本能抓到，肉眼很难）**：
+**实测三类**：整篇重复（第 32、37 章）、**头部元信息块 + 标题被整块吞掉**（第 7 章）。
+
+**症状（`manuscript_check.py` 能抓到，肉眼很难）**：
 - 字数**正好接近原值的 2 倍**，`LQ/RQ` 计数同样是 2 倍
 - `head` 不是 `# 第N章　标题` 的规范形式，而是 `# 第N章　<正文首句>`
 - 文件里只有一个 `# ` 行；同一句首句在文件**约一半处**再次出现
+- 文件头只剩 `# 第0007章 `（标题文字没了）或干脆第一行不是 `<!--`（元信息块整块消失）
 
-章节本身读起来是通的，所以只能靠体检。**⚠️ 每批次收尾必须跑一次全书体检**（字数 / `dup` / `head` / 引号 / BOM / CRLF）。
+章节本身读起来是通的，所以只能靠体检。
 
-**修复**：不要整篇重写（会丢改动）。用脚本按「首行 + 首句第二次出现的位置」切开：
-1. 定位第二遍起点 `k`（首句第二次出现的行号）
-2. 保留 `lines[0:k]`（第一遍）
-3. 把 `lines[0]` 换成规范标题，并在其后补回被吞掉的首句 + 空行
-4. 校验：修复后字数应与两层状态机记录的一致，且 `head` 规范
+> ⚠️ **每批次收尾必须跑一次全书体检**：
+> `python "<SKILL_DIR>/scripts/manuscript_check.py" "<项目>/"`
+> 覆盖 字数 / `dup` / `head` / 引号 / BOM / CRLF / 章号连续性 七项。
+> **这条纪律以前是空头支票——脚本一直不存在**，所以第 7 章的头部丢失才能一路活到交付。
+> 现在补上了 `scripts/manuscript_check.py`，收尾时**必须真跑**。
 
-## 字数脚本只能逐文件调用
+**成因（重要）**：头部丢失的根因**不是** `fix_punct.py`——它只做字符替换、**从不删行**。
+真正的成因是**拿整篇覆写去改一章正文**（Write 全量覆盖时把头部一起丢了）。
+→ 规矩：**改章节正文一律用定点替换（Edit / 局部脚本），不要整篇覆写。**
 
-`scripts/check_wordcount.py` **不支持一次传多个文件**——传"目录 + 多文件"会返回非 JSON，`json.loads` 直接抛 `Expecting value: line 1 column 1`。
+**修复**：
+- 整篇重复 → 不要整篇重写（会丢改动）。用脚本按「首行 + 首句第二次出现的位置」切开：
+  1. 定位第二遍起点 `k`（首句第二次出现的行号）
+  2. 保留 `lines[0:k]`（第一遍）
+  3. 把 `lines[0]` 换成规范标题，并在其后补回被吞掉的首句 + 空行
+  4. 校验：修复后字数应与两层状态机记录的一致，且 `head` 规范
+- 头部被吞 → 按 `references/templates/chapter-template.md` 把 `<!-- …六个键… -->` 块原样补回，
+  并在其后补 `# 第NNNN章 标题`；**补完立刻跑 `manuscript_check.py` 验证**。
 
-- 一次一个文件，用 `subprocess` 循环调，自己累加。
-- `--json` 输出里，单文件时取 `['chapters'][0]`，键名是 **`file`**（不是 `chapterNo`）、`wordCount`、`pass`、`reason`。
+## 章节文件的解析只有一个实现（chapter_io.py）
+
+**★ 2026-10-07 实测的第二形态坑**：章节文件按 `chapter-template.md` 的要求以
+`<!-- 元信息块 -->` 开头，而 `split_chapters.py` / `delivery_check.py` 都用
+
+```python
+re.match(r"^#\s*(.+?)\s*\n(.*)$", text, re.S)
+```
+
+抓标题。**`re.match` 只从字符串最开头匹配**，文件第一行是 `<!--`，于是**永远匹配不上**。
+后果：整个元信息块被当正文写进成品 txt、`# 第N章 标题` 也一起漏出去、章节名只剩「第一章」——
+而 `delivery_check.py` 因为两端用的是**同一套坏逻辑**，反而报「一致 ✅」，是个**假通过**。
+
+**规矩**：
+1. **头部识别与正文清洗一律走 `scripts/chapter_io.py`**（`parse` / `parse_file` /
+   `clean_body` / `norm_for_compare`），任何脚本都不要再本地写一份正则或 `clean_body`。
+   这同样是"归一化必须一致"那条规矩的执行——见上一节。
+2. 需要"从文件开头取头部"时，**别用 `re.match`**；用 `chapter_io.parse()`，
+   它已处理 BOM / CRLF / 全角半角冒号 / 无元信息块的老文件。
+3. 校验脚本报「一致」时先自问一句：**是不是两边都脏？** 用故意改坏一端的方式做反向验证，
+   确认它真的会报 `不一致 ❌`。只跑正向、看到绿灯就收工，是踩这个坑的固定姿势。
+
+## 字数脚本的调用与输出
+
+`check_wordcount.py` **支持一次传多个文件，也支持直接传目录**（按章号排序、重号去重）。
+
+- 传"目录 + 多文件"混用也可以；旧版只认第一个参数，**多传的文件被静默忽略**，
+  看起来"全部通过"而实际没查——这个坑已修，但**别再用"一次一个"的写法自我安慰**。
+- `--json` 输出里 `chapters` 是数组，键名是 **`file`**（不是 `chapterNo`）、
+  `wordCount`、`pass`、`reason`；单文件时取 `['chapters'][0]`。
+- 批量仍有需要时，用 `subprocess` 循环调、自己累加即可，**但口径必须还是脚本的**，
+  不要手写计数（见上文"绝不要手写计字脚本"）。
 
 ## 用户偏好系统
 

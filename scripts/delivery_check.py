@@ -7,6 +7,13 @@
 ⚠️ 关键约束：本脚本对源文件的归一化必须与 `split_chapters.py` **完全一致**。
 实测教训：终检脚本只去 `**` 而生成脚本去所有 `*`，会把**正确的成品判成「不一致 ❌」**，
 于是人去改本来没问题的东西——这种「假失败」比漏检更浪费。
+→ 归一化与字数**全部走 `chapter_io`**，本文件不再自己写 `re.sub(r"\\s","")` 或 CJK 正则。
+
+⚠️ 会打印**两个**字数，各自的含义不同，不要混用：
+- **源文件合计**：`chapter_io.count_chars` 作用在源 `.md` 全文上 = `check_wordcount.py`
+  的同一个数（含 `# 第N章 标题` 行）。**这是账目口径，写进状态机的就是它。**
+- **正文合计**：同一函数作用在正文（剥掉标题行）上，对应平台后台"章节正文字数"。
+  两者差额 = 标题行的字（约 5-7 字/章）。
 
 用法：
     python delivery_check.py --src 04-正文 --out 09-分章上架 \
@@ -19,6 +26,9 @@ import io
 import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from chapter_io import clean_body, count_chars, count_cjk, norm_for_compare, parse  # noqa: E402
 
 BAD = {
     "半角逗号 ,": ",",
@@ -34,10 +44,8 @@ BAD = {
 
 
 def strip_md(t):
-    """与 split_chapters.clean_body 保持一致：星号一次清干净"""
-    t = re.sub(r"\*+", "", t)
-    t = t.replace("__", "")
-    return re.sub(r"\s", "", t)
+    """兼容旧调用：等价于 chapter_io 的清洗 + 去空白。"""
+    return re.sub(r"\s", "", clean_body(t))
 
 
 def main():
@@ -60,17 +68,18 @@ def main():
     def read_out(f):
         return io.open(os.path.join(a.out, f), encoding="utf-8-sig").read()
 
-    def norm_src(n):
-        # 源目录里找含该章号的 md
+    def read_src(n):
+        """返回 (源文件全文, 归一化正文)；找不到返回 (None, None)。
+
+        剥元信息块 + 剥 H1 + 同一套清洗，全部走 chapter_io（唯一实现）。
+        """
         cand = [f for f in os.listdir(a.src)
                 if f.endswith(".md") and re.search(r"\d+", f)
                 and int(re.search(r"\d+", f).group()) == n]
         if not cand:
-            return None
-        raw = io.open(os.path.join(a.src, cand[0]), encoding="utf-8").read()
-        m = re.match(r"^#\s*.+?\n(.*)$", raw, re.S)
-        body = m.group(1) if m else raw
-        return strip_md("\n".join(l.rstrip() for l in body.split("\n")))
+            return None, None
+        raw = io.open(os.path.join(a.src, cand[0]), encoding="utf-8-sig").read()
+        return raw, norm_for_compare(raw)
 
     fail = []
 
@@ -78,16 +87,21 @@ def main():
     print("【1】成品 vs 源文件：第 1 行 = 章节名，正文逐字一致")
     print("-" * 58)
     tot_cjk = tot_all = 0
+    raws = {}
     for f in CH:
         n = int(re.search(r"\d+", f).group())
         txt = read_out(f)
         parts = txt.split("\n", 2)
         chap_name = parts[0]
         body = parts[2] if len(parts) > 2 else ""
-        src = norm_src(n)
+        raw, src = read_src(n)
         same = (src is not None and strip_md(body) == src)
-        cjk = len(re.findall(r"[\u4e00-\u9fff]", body))
-        allc = len(re.sub(r"\s", "", body))
+        # 字数口径统一走 chapter_io（= check_wordcount.py 同一个函数），
+        # 不要在这里再写一套 re.sub(r"\s", "") —— 那正是三个总字数打架的成因。
+        cjk = count_cjk(raw) if raw else 0
+        allc = count_chars(raw) if raw else 0
+        if raw:
+            raws[n] = raw
         tot_cjk += cjk
         tot_all += allc
         if not same:
@@ -141,11 +155,13 @@ def main():
     print()
     print(f"【4】上架门槛（满 {a.threshold} 字开放签约入口）")
     print("-" * 58)
-    sizes = [len(re.sub(r"\s", "", read_out(f).split("\n", 2)[2])) for f in CH]
+    # 门槛按**正文**算（平台后台不计章节名行），正文口径同样走 chapter_io
+    sizes = [count_chars(parse(raws[int(re.search(r"\d+", f).group())])["body"])
+             for f in CH if int(re.search(r"\d+", f).group()) in raws]
     cum = sum(sizes[:a.first_day])
     flag = "✅ 越线" if cum >= a.threshold else f"❌ 差 {a.threshold - cum} 字，门槛未开"
     print(f"  首日发前 {a.first_day} 章 = {cum} 字  {flag}")
-    print(f"  全篇 {len(CH)} 章 = {sum(sizes)} 字")
+    print(f"  全篇 {len(sizes)} 章正文 = {sum(sizes)} 字")
 
     # ── 5. 结论 ──────────────────────────────────────────────
     print()
@@ -155,8 +171,9 @@ def main():
         print("  ❌ 存在问题：" + "；".join(fail))
         return 1
     print("  ✅ 成品与源文件一致、标点纯净、引号配平，可交付")
-    print(f"  正文合计：汉字 {tot_cjk} / 含标点 {tot_all}"
-          "（口径：去空白、不含章节名）")
+    print(f"  源文件合计：汉字 {tot_cjk} / 含标点 {tot_all}"
+          "（唯一口径 = chapter_io.count_chars，与 check_wordcount.py 一致）")
+    print(f"  正文合计（不含章节名行、平台后台口径）：{sum(sizes)} 字")
     return 0
 
 

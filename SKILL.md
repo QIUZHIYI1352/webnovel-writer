@@ -96,7 +96,8 @@ AI 腔密度、设定越界、伏笔声明执行率。
 ## 共享机制
 
 分层记忆系统（L1-L7 与读取预算）、两层状态机 JSON、伏笔账本、主线状态卡、设定词典、
-三个校验脚本、修订与回退流程、用户偏好。
+五个校验脚本（`fix_punct` / `check_wordcount` / `quality_check` / `manuscript_check` / `delivery_check`）、
+修订与回退流程、用户偏好。
 
 **脚本调用顺序（每章写完必走一遍）**：
 ```
@@ -106,14 +107,25 @@ Write 章节 → fix_punct.py（标点归一化）→ check_wordcount.py（字�
 ⚠️ **清完标点必须重跑质量门禁**：归一化会把原本是 ASCII 直引号的术语变成全角引号，
 从而**让之前被掩盖的设定越界告警浮现出来**（实测新增 4 个 P2）。这不是新问题，是旧问题露头。
 
-**交付/投稿收尾（完本时走一遍）**：
+**批次收尾 / 交付投稿收尾**：
 ```
-quality_check.py 全量 → split_chapters.py（分章纯文本）→ make_cover.py（封面）→ 终检脚本
+manuscript_check.py（全书体检：头部/编码/重复/配平/缺号）→ quality_check.py 全量
+→ split_chapters.py（分章纯文本）→ make_cover.py（封面）→ delivery_check.py（成品 vs 源文件终检）
 ```
+- `manuscript_check.py`：**文件完整性**兜底——首行是否 `<!--`、六个元信息键是否齐、
+  三处章号是否一致、字数是否漂移、引号是否配平、有无 BOM/CRLF、正文是否整篇重复、章号有无缺号。
+  **这条纪律以前是空头支票（脚本不存在），所以第 7 章的头部丢失才能活到交付——现在必须真跑。**
 - `split_chapters.py`：逐章 md → 可直接粘贴的纯文本分章文件（章节名一行 + 正文），
   剥离 Markdown 标记、UTF-8 BOM 编码
 - `make_cover.py`：AI 底图 + 矢量文字合成 600×800 投稿封面
+- `delivery_check.py`：成品 txt 与源文件逐字比对 + 标点纯净度 + 引号配平 + 上架门槛
 - 完整投稿清单见 [short-story.md](references/guides/short-story.md) 第五、六节
+
+⚠️ **改章节正文一律用定点替换（Edit / 局部脚本），不要整篇覆写。** 头部元信息块丢失的
+唯一实测成因就是整篇覆写（第 7 章）；`fix_punct.py` 只做替换、从不删行。
+⚠️ **解析章节文件一律走 `scripts/chapter_io.py`**，不要在脚本里各写一份正则——
+`re.match(r"^#...")` 只从字符串开头匹配，对以 `<!--` 开头的文件**永远匹配不上**，
+会造成"元信息块泄进成品、标题塌成第一章、而终检还报一致 ✅"的假通过。
 
 → 详见 [shared-infrastructure.md](references/flows/shared-infrastructure.md)
 
