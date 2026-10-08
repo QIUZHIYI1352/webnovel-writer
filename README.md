@@ -21,7 +21,10 @@
 | 字数不达标还自评"约 2000 字" | 模型自评不可信 | 脚本实测（CJK 汉字 + 中文标点） |
 | **连续六章全是压抑没爽点，没人发现** | **质量项无客观判据** | **`quality_check.py` 情绪节奏检查** |
 | **钩子写法连用五章雷同，读者麻木** | **同上** | **`quality_check.py` 钩子形状轮换检查** |
+| **章末全是软钩，读者没有点下一章的理由** | **只查"不连用"，不查强度** | **`quality_check.py` 软钩占比检查** |
+| **前 14 章零收益，收益给在第 15 章——追读率早就掉了** | **门禁算不出开局空档** | **开局留存窗口 P0 + 「留存速览」** |
 | **细纲说好要收的伏笔，写起来忘了** | **计划是自由文本，无从核对** | **`BATCH-DECLARATION` 声明块 + 执行率核对** |
+| **口头豁免"前 8 章不改"，把改进建议一起吃掉了** | **豁免不入账** | **`waivers.json` 台账，每次体检打印** |
 | 写长任务中途反复找用户确认 | Agent 行为退化 | 显式反退化禁令 + 重试上限 |
 
 ---
@@ -116,15 +119,19 @@ HTML 注释中的章节元信息头不计入，且元信息自报字数与实测
 **质量纪律**同样外移——这是第三道防线，也是本 skill 区别于其他写作工具的地方：
 
 ```bash
-python "<SKILL_DIR>/scripts/quality_check.py" "<项目>"                    # 全量体检查五项
+python "<SKILL_DIR>/scripts/quality_check.py" "<项目>"                    # 全量体检（开头打印「留存速览」）
 python "<SKILL_DIR>/scripts/quality_check.py" "<项目>" --chapters 45-45    # 单章门禁
 python "<SKILL_DIR>/scripts/quality_check.py" "<项目>" --json --strict     # 有 P0 即非零退出
+python "<SKILL_DIR>/scripts/selftest_quality_check.py"                    # 改过判定逻辑后必跑
 ```
 
 | 检查 | 抓什么 | 级别 |
 |------|--------|------|
-| `emotion` | 连续「压」超 2 章、爽点间距超 8 章 | P0 |
+| `emotion` | 连续「只有成本」超 2 章；兑现空档超 8 章（**从第 1 章起算**） | P0 |
+| `emotion` | **开局留存窗口**：前 3 章兑现 <1、前 10 章兑现 <2 或收益 <3 | P0 |
+| `emotion` | 情绪标签带模糊批注（`压(微爽:活下来)`） | P2 |
 | `hook` | 章末钩子形状连用超 2 章 | P0 |
+| `hook` | **软钩占比超 60%**（短句留白 / 对白悬停） | P1 |
 | `ai_cliche` | 每千字 AI 腔高频词超 6 处 | P1 |
 | `setting` | 词典外专有名词（须登记或确认同义混用） | P2 |
 | `foreshadow` | 细纲声明的强制回收未执行 | P0 |
@@ -171,7 +178,8 @@ webnovel-writer/
     ├── fix_punct.py                    # 标点归一化（半角→全角 / 直角引号 / ASCII 直引号）
     ├── fix_quotes.py                   # 中文引号按行配对修复
     ├── check_wordcount.py              # 字数检查（单章 / 多章 / 整卷 / 整本书 / JSON）
-    ├── quality_check.py                # 质量门禁（情绪/钩子/AI腔/设定/伏笔声明执行率）
+    ├── quality_check.py                # 质量门禁（留存/情绪/钩子强度与轮换/AI腔/设定/伏笔执行率）
+    ├── selftest_quality_check.py       # 门禁自身的反向验证（坏样本必须报红）
     ├── manuscript_check.py             # 全书体检（头部/编码/重复/配平/章号连续性）
     ├── split_chapters.py               # 逐章 md → 可直接粘贴的纯文本分章 + 分卷合并稿
     ├── delivery_check.py               # 交付终检（成品 vs 源文件逐字比对 + 上架门槛）
